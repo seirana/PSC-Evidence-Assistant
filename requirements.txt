@@ -1,0 +1,13 @@
+numpy
+pandas
+scikit-learn
+networkx
+pydantic
+tqdm
+regex
+streamlit
+transformers
+peft
+trl
+accelerate
+datasets
