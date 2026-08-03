@@ -1,0 +1,1 @@
+{"input":"Text: PSC is a chronic cholestatic liver disease.","output":"{\"entities\":[{\"type\":\"Disease\",\"name\":\"PSC\"}],\"relations\":[{\"source\":\"PSC\",\"relation\":\"ASSOCIATED_WITH\",\"target\":\"cholestatic liver disease\",\"evidence_chunk_id\":\"manual\"}]}"}
