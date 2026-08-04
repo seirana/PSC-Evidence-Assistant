@@ -1,4 +1,4 @@
-# PSC Evidence Assistant
+# Understanding LLMs Through a Real Project: PSC Evidence Assistant
 
 - **RAG** (retrieval-augmented generation) over local project/literature documents
 - **Prompt engineering** (strict schemas for query planning + extraction)
