@@ -14,7 +14,7 @@
 **Goal:** Build an evidence-grounded assistant for PSC work that can answer questions from * documentation* and produce a small knowledge graph of entities/relations (Disease, Method, Dataset, Parameters, etc.).
 
 ### Example question
-> *What are the inputs and outputs of scDRS in our PSC pipeline?*
+> *What are the inputs and outputs in our PSC pipeline?*
 
 ### Expected solution (behavior)
 - Retrieve relevant chunks from your local corpus (RAG)
