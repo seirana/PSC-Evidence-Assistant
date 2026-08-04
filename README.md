@@ -11,7 +11,7 @@
 ---
 
 ## Project definition
-**Goal:** Build an evidence-grounded assistant for PSC work that can answer questions from * documentation* and produce a small knowledge graph of entities/relations (Disease, Method, Dataset, Parameters, etc.).
+**Goal:** Build an evidence-grounded assistant for PSC work that can answer questions from *documentation* and produce a small knowledge graph of entities/relations (Disease, Method, Dataset, Parameters, etc.).
 
 ### Example question
 > *What are the inputs and outputs in our PSC pipeline?*
