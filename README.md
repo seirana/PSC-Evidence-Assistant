@@ -29,7 +29,6 @@ If you want to download your existing dataset zip from GitHub into this repo (ex
 
 ```bash
 mkdir -p data
-
 wget -O data/HumanLiverHealthyscRNAseqData.zip \
 "https://github.com/seirana/PSC-scDRS/raw/refs/heads/main/data/HumanLiverHealthyscRNAseqData.zip"
 ```
