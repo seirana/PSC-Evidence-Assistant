@@ -24,12 +24,14 @@
 
 ---
 
-## One-click data download link (optional)
-If you want to download your existing dataset zip from GitHub into this repo (example):
+## One-click code and data download link 
 
 ```bash
-mkdir -p data
-wget -O data/HumanLiverHealthyscRNAseqData.zip \
+cd ~
+git clone https://github.com/seirana/PSC-Evidence-Assistant.git
+mkdir -p ~/PSC-Evidence-Assistant/data
+
+wget -O ~/PSC-Evidence-Assistant/data/HumanLiverHealthyscRNAseqData.zip \
 "https://github.com/seirana/PSC-scDRS/raw/refs/heads/main/data/HumanLiverHealthyscRNAseqData.zip"
 ```
 
