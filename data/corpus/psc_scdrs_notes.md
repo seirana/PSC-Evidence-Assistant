@@ -1,15 +1,6 @@
-# PSC-scDRS notes (sample)
+# Questions
 
-This is a small example corpus file. Replace it with your real project docs.
-
-## scDRS overview
-- scDRS is used to score disease relevance at the single-cell level using GWAS summary statistics.
-- Typical inputs: GWAS summary statistics; single-cell expression matrix; gene set (optional).
-- Typical outputs: per-cell scores, p-values, and cell-type level summary statistics.
-
-## PSC context
-Primary sclerosing cholangitis (PSC) is a chronic cholestatic liver disease.
-
-## Practical notes
-- Keep thresholds (e.g., Monte Carlo p-values) in configuration.
-- Store provenance: which GWAS, which scRNA dataset, which parameters.
+What is primary sclerosing cholangitis (PSC), and what are its main clinical features and complications?
+What major therapeutic approaches have been studied in PSC, and what have clinical trials shown about UDCA, norUDCA, cilofexor, vancomycin, bexotegrast, and elafibranor?
+What are the most promising future treatment strategies for PSC, and why is improvement in alkaline phosphatase (ALP) alone not sufficient to prove that a treatment changes disease progression?
+Which specific genetic mutation is considered the primary cause of PSC?
