@@ -42,6 +42,7 @@ wget -O ~/PSC-Evidence-Assistant/data/HumanLiverHealthyscRNAseqData.zip \
 ## Quickstart
 
 ```bash
+# Make an environment
 cd ~/PSC-Evidence-Assistant
 
 python3 -m venv .venv
