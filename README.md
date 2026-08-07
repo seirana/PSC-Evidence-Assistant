@@ -28,8 +28,10 @@
 If you want to download your existing dataset zip from GitHub into this repo (example):
 
 ```bash
+mkdir -p data
+
 wget -O data/HumanLiverHealthyscRNAseqData.zip \
-  "https://raw.githubusercontent.com/seirana/PSC-scDRS/main/data/HumanLiverHealthyscRNAseqData.zip"
+"https://github.com/seirana/PSC-scDRS/raw/refs/heads/main/data/HumanLiverHealthyscRNAseqData.zip"
 ```
 
 > If the file is managed by Git LFS, `wget` may download a pointer file. In that case, use `git lfs pull` in the original repo.
