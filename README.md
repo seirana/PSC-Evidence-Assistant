@@ -42,9 +42,13 @@ wget -O ~/PSC-Evidence-Assistant/data/HumanLiverHealthyscRNAseqData.zip \
 ## Quickstart
 
 ```bash
-python -m venv .venv
+cd ~/PSC-Evidence-Assistant
+
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
 # Add your own docs into data/corpus/ as .md or .txt
 
