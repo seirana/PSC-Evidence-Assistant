@@ -8,7 +8,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 @dataclass
 class RetrievedChunk:
     """
-    One chunk returned by the retrieval system.
+    A chunk that was retrieved because it is relevant
+    to the user's question.
     """
 
     doc_path: str
@@ -19,21 +20,49 @@ class RetrievedChunk:
 
 class TfidfRAG:
     """
-    Simple retrieval system based on TF-IDF and cosine similarity.
+    Simple RAG retrieval system using:
 
-    It receives text chunks created by ingest.py and allows us
-    to search for chunks that are relevant to a user's question.
+    1. TF-IDF
+    2. cosine similarity
+
+    The class receives chunks created by ingest.py and
+    searches those chunks when the user asks a question.
     """
 
     def __init__(self, records: List[Dict]):
+        """
+        Build the TF-IDF search index.
 
-        self.records = records
+        Parameters
+        ----------
+        records:
+            List of dictionaries produced by chunks_to_records().
 
-        # Extract only the text from every chunk.
-        self.texts = [
-            record["text"]
+            Example:
+
+            {
+                "doc_id": "...",
+                "doc_path": "data/corpus/paper.pdf",
+                "chunk_id": "...",
+                "text": "..."
+            }
+        """
+
+        # IMPORTANT:
+        # Keep records and texts aligned.
+        #
+        # If an empty record is removed, it must be removed
+        # from both lists. Otherwise indexes could point to
+        # the wrong document.
+        self.records = [
+            record
             for record in records
             if record.get("text", "").strip()
+        ]
+
+        self.texts = [
+            record["text"]
+            for record in self.records
         ]
 
         self.vectorizer = TfidfVectorizer(
@@ -43,19 +72,21 @@ class TfidfRAG:
             ngram_range=(1, 2),
         )
 
-        # matrix will contain the TF-IDF representation
+        # This will contain the vector representation
         # of all document chunks.
         self.matrix = None
 
-        # Avoid crashing if the corpus is empty.
+        # Build the TF-IDF index only if we actually
+        # have documents.
         if self.texts:
             try:
                 self.matrix = self.vectorizer.fit_transform(
                     self.texts
                 )
+
             except ValueError:
-                # This can happen if no useful vocabulary
-                # can be extracted from the documents.
+                # Example:
+                # The corpus exists but contains no usable words.
                 self.matrix = None
 
     def retrieve(
@@ -70,27 +101,30 @@ class TfidfRAG:
         Parameters
         ----------
         query:
-            The user's question.
+            User question or rewritten search query.
 
         top_k:
             Maximum number of chunks to return.
 
         min_score:
-            Minimum cosine similarity required for a chunk
-            to be considered relevant.
+            Minimum cosine-similarity score required
+            for a chunk to be accepted.
 
         Returns
         -------
         List[RetrievedChunk]
 
-        If nothing is relevant enough, an empty list is returned.
+        If no chunk is relevant enough, this function
+        returns an empty list:
+
+            []
         """
 
-        # Empty question -> no retrieval
-        if not query.strip():
+        # No useful question
+        if not query or not query.strip():
             return []
 
-        # Empty/unusable corpus -> no retrieval
+        # No usable corpus
         if not self.records or self.matrix is None:
             return []
 
@@ -98,33 +132,65 @@ class TfidfRAG:
             return []
 
         if min_score < 0:
-            raise ValueError("min_score must be >= 0")
+            raise ValueError(
+                "min_score must be >= 0"
+            )
 
-        # Convert the question to a TF-IDF vector
-        query_vector = self.vectorizer.transform([query])
+        # ---------------------------------------------
+        # STEP 1:
+        # Convert the user's question into the same
+        # TF-IDF vector space as the document chunks.
+        # ---------------------------------------------
 
-        # If none of the words in the question exist
-        # in our corpus vocabulary, there is no evidence.
+        query_vector = self.vectorizer.transform(
+            [query]
+        )
+
+        # nnz = number of non-zero values.
+        #
+        # If it is 0, none of the useful words from
+        # the question exist in our TF-IDF vocabulary.
+        #
+        # Therefore there is no useful lexical match.
         if query_vector.nnz == 0:
             return []
 
-        # Compare question with every document chunk
+        # ---------------------------------------------
+        # STEP 2:
+        # Compare the question with every chunk.
+        # ---------------------------------------------
+
         similarities = cosine_similarity(
             query_vector,
             self.matrix,
         ).ravel()
 
-        # Sort from most similar to least similar
+        # ---------------------------------------------
+        # STEP 3:
+        # Sort chunks from highest similarity
+        # to lowest similarity.
+        # ---------------------------------------------
+
         ranked_indices = similarities.argsort()[::-1]
 
         retrieved: List[RetrievedChunk] = []
 
+        # ---------------------------------------------
+        # STEP 4:
+        # Keep only chunks above min_score.
+        # ---------------------------------------------
+
         for index in ranked_indices:
 
-            score = float(similarities[index])
+            score = float(
+                similarities[index]
+            )
 
-            # Because results are sorted from highest to lowest,
-            # once we go below the threshold we can stop.
+            # Results are already sorted from high to low.
+            #
+            # Therefore, once we reach a score below the
+            # threshold, all following results will also
+            # be below the threshold.
             if score < min_score:
                 break
 
@@ -139,7 +205,7 @@ class TfidfRAG:
                 )
             )
 
-            # Stop when we have enough chunks
+            # We already collected enough evidence.
             if len(retrieved) >= top_k:
                 break
 
@@ -151,18 +217,27 @@ def format_context(
     max_chars: int = 9000,
 ) -> Tuple[str, List[Dict]]:
     """
-    Convert retrieved chunks into text that can be given to the LLM.
+    Prepare retrieved chunks for the LLM.
 
-    It also returns citation information so we know exactly
-    which document/chunk was used.
+    Returns two things:
+
+    1. context
+       Text that will be placed in the LLM prompt.
+
+    2. citations
+       Information about where each piece of evidence
+       came from.
     """
 
-    # No evidence was retrieved.
     if not retrieved:
+        return "", []
+
+    if max_chars <= 0:
         return "", []
 
     blocks = []
     citations = []
+
     total_chars = 0
 
     for chunk in retrieved:
@@ -181,7 +256,8 @@ def format_context(
             + "\n"
         )
 
-        # Do not make the context too large.
+        # Do not send an excessively large context
+        # to the LLM.
         if total_chars + len(block) > max_chars:
             break
 
@@ -197,6 +273,8 @@ def format_context(
             }
         )
 
-    context = "\n".join(blocks).strip()
+    context = "\n".join(
+        blocks
+    ).strip()
 
     return context, citations
