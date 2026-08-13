@@ -11,3 +11,5 @@ peft
 trl
 accelerate
 datasets
+python-docx
+pypdf
