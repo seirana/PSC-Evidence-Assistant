@@ -33,7 +33,7 @@ git clone https://github.com/seirana/PSC-Evidence-Assistant.git
 ---
 
 
-## Quickstart - Run demo
+## Quickstart and Run a demo
 
 ```bash
 # Make an environment
