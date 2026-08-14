@@ -4,7 +4,6 @@
 - **Prompt engineering** (strict schemas for query planning + extraction)
 - A tool-using **AI agent** (plan → retrieve → extract → graph → answer → verify)
 - **Knowledge graph** construction and querying (NetworkX; GraphML/JSON export)
-- **Fine-tuning ready** data format (JSONL) to improve schema-compliant extraction
 
 > Default mode runs without any model (dummy). You can plug in **LLaMA via Ollama** in minutes.
 
@@ -21,21 +20,6 @@
 - Provide an answer with **citations** (chunk IDs)
 - Extract entities/relations and update a knowledge graph
 - Optionally run a grounding check
-
----
-
-## One-click code and data download link 
-
-```bash
-cd ~
-git clone https://github.com/seirana/PSC-Evidence-Assistant.git
-mkdir -p ~/PSC-Evidence-Assistant/data
-
-wget -O ~/PSC-Evidence-Assistant/data/HumanLiverHealthyscRNAseqData.zip \
-"https://github.com/seirana/PSC-scDRS/raw/refs/heads/main/data/HumanLiverHealthyscRNAseqData.zip"
-```
-
-> If the file is managed by Git LFS, `wget` may download a pointer file. In that case, use `git lfs pull` in the original repo.
 
 ---
 
@@ -86,14 +70,6 @@ python run_demo.py
 ```bash
 streamlit run app.py
 ```
-
----
-
-## Fine-tuning (optional, later)
-
-The folder `data/fine_tune/` contains JSONL templates for supervised fine-tuning (SFT) to improve strict JSON outputs for entity/relation extraction.
-
-Typical goal: increase **JSON validity** and **schema compliance** for the extractor.
 
 ---
 
