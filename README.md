@@ -22,8 +22,18 @@
 - Optionally run a grounding check
 
 ---
+## Clone the repository
 
-## Quickstart
+```bash
+cd ~
+git clone https://github.com/seirana/PSC-Evidence-Assistant.git
+
+```
+
+---
+
+
+## Quickstart and Run demo
 
 ```bash
 # Make an environment
@@ -35,7 +45,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
-# Add your own docs into data/corpus/ as .md or .txt
+# Add your own docs into data/corpus/ as .md or .txt or .docx, or .pdf
 
 # Run the demo (works in dummy mode)
 python run_demo.py
