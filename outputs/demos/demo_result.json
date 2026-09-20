@@ -1,34 +1,33 @@
 {
-  "question": "What are the inputs and outputs of scDRS in our PSC pipeline?",
+  "question": "What is Primary Sclerosing Cholangitis?",
   "plan": {
-    "supported": true,
-    "unsupported_claims": [],
-    "notes": "dummy mode"
+    "rewritten_queries": [
+      "Primary Sclerosing Cholangitis",
+      "Primary sclerosing cholangitis"
+    ],
+    "entities_of_interest": [
+      "Primary Sclerosing Cholangitis"
+    ]
   },
-  "plan_raw": "{\"supported\": true, \"unsupported_claims\": [], \"notes\": \"dummy mode\"}",
+  "plan_raw": "{\n  \"rewritten_queries\": [\"Primary Sclerosing Cholangitis\", \"Primary sclerosing cholangitis\"],\n  \"entities_of_interest\": [\"Primary Sclerosing Cholangitis\"]\n}",
   "citations": [
     {
-      "doc_path": "/mnt/data/psc-evidence-assistant/data/corpus/psc_scdrs_notes.md",
-      "chunk_id": "4eb11309cd_0000",
-      "score": 0.23694203255994578
-    },
-    {
-      "doc_path": "/mnt/data/psc-evidence-assistant/data/corpus/pipeline_readme_excerpt.md",
-      "chunk_id": "973f377f4c_0000",
-      "score": 0.08930745021258221
+      "doc_path": "/home/seirana/PSC-Evidence-Assistant/data/corpus/Universal Overview of PSC.md",
+      "chunk_id": "c93b405b31_0000",
+      "score": 0.29258745462803687
     }
   ],
   "graph_facts": {
-    "supported": true,
-    "unsupported_claims": [],
-    "notes": "dummy mode"
+    "entities": [],
+    "relations": []
   },
-  "graph_facts_raw": "{\"supported\": true, \"unsupported_claims\": [], \"notes\": \"dummy mode\"}",
-  "answer": "Not found in provided documents.",
+  "graph_facts_raw": "{\n  \"entities\": [\n    {\n      \"type\": \"Disease\",\n      \"name\": \"Primary Sclerosing Cholangitis\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Bile Acids-Based Therapies\",\n      \"evidence_chunk_id\": \"c93b405b31_0020\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Gut-Liver Axis\",\n      \"evidence_chunk_id\": \"c93b405b31_0019\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Cholangiocyte Biology\",\n      \"evidence_chunk_id\": \"c93b405b31_0018\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Immune Response\",\n      \"evidence_chunk_id\": \"c93b405b31_0017\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Fibrosis\",\n      \"evidence_chunk_id\": \"c93b405b31_0016\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Liver Transplantation\",\n      \"evidence_chunk_id\": \"c93b405b31_0015\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Cholangiocarcinoma\",\n      \"evidence_chunk_id\": \"c93b405b31_0014\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation\": \"ASSOCIATED_WITH\",\n      \"target\": \"Bile Acids\",\n      \"evidence_chunk_id\": \"c93b405b31_0013\"\n    },\n    {\n      \"source\": \"Primary Sclerosing Cholangitis\",\n      \"relation",
+  "answer_raw": "Primary sclerosing cholangitis is a chronic fibro-inflammatory disease of the bile ducts. It can affect intrahepatic bile ducts, extrahepatic bile ducts, or both. Persistent inflammation and tissue remodeling lead to multifocal narrowing of the biliary tree, progressive cholestasis, and, in some patients, biliary cirrhosis, portal hypertension, liver failure, and the need for liver transplantation. (c93b405b31_0000)\n\nThe word sclerosing refers to scarring and fibrosis. Cholangitis refers to inflammation of the bile ducts. In PSC, the characteristic pathology is not a single obstructing lesion but a chronic pattern of bile-duct injury, inflammation, fibrosis, and alternating strictured and relatively normal or dilated segments. (c93b405b31_0000)",
+  "answer": "Primary sclerosing cholangitis is a chronic fibro-inflammatory disease of the bile ducts. It can affect intrahepatic bile ducts, extrahepatic bile ducts, or both. Persistent inflammation and tissue remodeling lead to multifocal narrowing of the biliary tree, progressive cholestasis, and, in some patients, biliary cirrhosis, portal hypertension, liver failure, and the need for liver transplantation. (c93b405b31_0000)\n\nThe word sclerosing refers to scarring and fibrosis. Cholangitis refers to inflammation of the bile ducts. In PSC, the characteristic pathology is not a single obstructing lesion but a chronic pattern of bile-duct injury, inflammation, fibrosis, and alternating strictured and relatively normal or dilated segments. (c93b405b31_0000)",
   "grounding_check": {
     "supported": true,
     "unsupported_claims": [],
-    "notes": "dummy mode"
+    "notes": "Answer extracted directly from retrieved chunk c93b405b31_0000."
   },
-  "grounding_check_raw": "{\"supported\": true, \"unsupported_claims\": [], \"notes\": \"dummy mode\"}"
+  "grounding_check_raw": ""
 }

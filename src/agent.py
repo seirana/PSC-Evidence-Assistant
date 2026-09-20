@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Any, List, Optional
 
 from .rag import (
@@ -183,6 +184,153 @@ def _is_not_found_answer(
     )
 
     return normalized == expected
+
+
+def _extract_direct_answer(
+    question: str,
+    chunk: RetrievedChunk,
+) -> str:
+    """
+    Extract a short answer directly from a matching document
+    section instead of asking the LLM to paraphrase it.
+
+    This path is used only for direct definition questions
+    such as "What is X?" when the retrieved chunk contains a
+    matching heading or an explicit "X is ..." statement.
+    Because the text comes from one known chunk, Python can
+    attach the real chunk ID without relying on the model to
+    invent or copy citations.
+    """
+
+    subject = _question_subject(
+        question
+    )
+
+    if not subject:
+        return ""
+
+    paragraphs = [
+        paragraph.strip()
+        for paragraph in re.split(
+            r"\n\s*\n",
+            chunk.text,
+        )
+        if paragraph.strip()
+    ]
+
+    selected: List[str] = []
+
+    # Prefer text immediately below a matching section
+    # heading, for example:
+    #
+    #   ## What is Primary Sclerosing Cholangitis?
+    #   Primary sclerosing cholangitis is ...
+    for index, paragraph in enumerate(
+        paragraphs
+    ):
+        heading = " ".join(
+            paragraph.lstrip("# ").casefold().split()
+        )
+
+        heading = re.sub(
+            r"^\d+[.)]?\s*",
+            "",
+            heading,
+        )
+
+        heading_matches = (
+            f"what is {subject}" in heading
+            or f"what are {subject}" in heading
+        )
+
+        if not heading_matches:
+            continue
+
+        for candidate in paragraphs[
+            index + 1:
+        ]:
+            if candidate.lstrip().startswith("#"):
+                break
+
+            if candidate.strip() in {
+                "---",
+                "***",
+            }:
+                continue
+
+            if (
+                candidate.count("http://")
+                + candidate.count("https://")
+                >= 2
+            ):
+                break
+
+            selected.append(
+                candidate
+            )
+
+            # Two source paragraphs are enough for a concise
+            # definition and prevent unrelated material from
+            # being included.
+            if len(selected) >= 2:
+                break
+
+        break
+
+    # If no matching heading exists, accept one paragraph
+    # containing an explicit definition sentence.
+    if not selected:
+        patterns = (
+            f"{subject} is ",
+            f"{subject} are ",
+        )
+
+        for paragraph in paragraphs:
+            normalized = " ".join(
+                paragraph.casefold().split()
+            )
+
+            if any(
+                pattern in normalized
+                for pattern in patterns
+            ):
+                selected = [
+                    paragraph
+                ]
+                break
+
+    cleaned_paragraphs = []
+
+    for paragraph in selected:
+        cleaned = paragraph.strip().lstrip(
+            "> "
+        )
+        cleaned = cleaned.replace(
+            "**",
+            "",
+        )
+        cleaned = re.sub(
+            r"\[(?:\d+(?:\s*,\s*\d+)*)\]",
+            "",
+            cleaned,
+        )
+        cleaned = " ".join(
+            cleaned.split()
+        ).strip()
+        cleaned = re.sub(
+            r"\s+([,.;:!?])",
+            r"\1",
+            cleaned,
+        )
+
+        if cleaned:
+            cleaned_paragraphs.append(
+                f"{cleaned} ({chunk.chunk_id})"
+            )
+
+    return "\n\n".join(
+        cleaned_paragraphs
+    )
 
 
 class EvidenceAgent:
@@ -570,20 +718,6 @@ class EvidenceAgent:
         # - ONLY the retrieved document context
         # =====================================================
 
-        answer_prompt = prompt_answer_with_citations(
-            user_question,
-            context,
-        )
-
-        answer_text = self.llm.generate(
-            answer_prompt
-        ).strip()
-
-        # TF-IDF sometimes retrieves bibliography chunks
-        # above the actual definition because the references
-        # repeat the disease name. If the model abstains even
-        # though a chunk directly matches a definition-style
-        # question, retry once using only that focused evidence.
         direct_chunks = [
             chunk
             for chunk in context_chunks
@@ -593,34 +727,75 @@ class EvidenceAgent:
             )
         ]
 
-        if (
-            _is_not_found_answer(answer_text)
-            and direct_chunks
-        ):
-            focused_context, focused_citations = (
-                format_context(
-                    direct_chunks,
-                    max_chars=5000,
-                )
+        extractive_answer = ""
+        extractive_chunk = None
+
+        for chunk in direct_chunks:
+            candidate = _extract_direct_answer(
+                user_question,
+                chunk,
             )
 
-            focused_prompt = (
-                prompt_answer_with_citations(
-                    user_question,
-                    focused_context,
-                )
+            if candidate:
+                extractive_answer = candidate
+                extractive_chunk = chunk
+                break
+
+        used_exact_extract = (
+            extractive_chunk is not None
+        )
+
+        if used_exact_extract:
+            # The answer consists only of text extracted from
+            # one retrieved chunk. Use its real citation and do
+            # not let a second LLM reinterpret or reject it.
+            answer_text = extractive_answer
+            context, citations = format_context(
+                [extractive_chunk],
+                max_chars=5000,
             )
 
-            focused_answer = self.llm.generate(
-                focused_prompt
+        else:
+            answer_prompt = prompt_answer_with_citations(
+                user_question,
+                context,
+            )
+
+            answer_text = self.llm.generate(
+                answer_prompt
             ).strip()
 
-            if not _is_not_found_answer(
-                focused_answer
+            # If the model abstains despite a direct-match
+            # chunk that could not be extracted, retry once
+            # using only the focused evidence.
+            if (
+                _is_not_found_answer(answer_text)
+                and direct_chunks
             ):
-                answer_text = focused_answer
-                context = focused_context
-                citations = focused_citations
+                focused_context, focused_citations = (
+                    format_context(
+                        direct_chunks,
+                        max_chars=5000,
+                    )
+                )
+
+                focused_prompt = (
+                    prompt_answer_with_citations(
+                        user_question,
+                        focused_context,
+                    )
+                )
+
+                focused_answer = self.llm.generate(
+                    focused_prompt
+                ).strip()
+
+                if not _is_not_found_answer(
+                    focused_answer
+                ):
+                    answer_text = focused_answer
+                    context = focused_context
+                    citations = focused_citations
 
         generated_answer_text = answer_text
 
@@ -631,7 +806,19 @@ class EvidenceAgent:
         # supported by the retrieved context.
         # =====================================================
 
-        if _is_not_found_answer(
+        if used_exact_extract:
+            verify_text = ""
+            verify = {
+                "supported": True,
+                "unsupported_claims": [],
+                "notes": (
+                    "Answer extracted directly from "
+                    f"retrieved chunk "
+                    f"{extractive_chunk.chunk_id}."
+                ),
+            }
+
+        elif _is_not_found_answer(
             answer_text
         ):
             verify_text = ""
