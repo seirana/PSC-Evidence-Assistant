@@ -66,13 +66,13 @@ class LLMClient:
 
         self.mode = os.getenv(
             "LLM_MODE",
-            "dummy",
+            "ollama",
         ).strip().lower()
 
         self.timeout = int(
             os.getenv(
                 "LLM_HTTP_TIMEOUT",
-                "120",
+                "600",
             )
         )
 
@@ -94,7 +94,7 @@ class LLMClient:
 
         self.ollama_model = os.getenv(
             "OLLAMA_MODEL",
-            "llama3.1",
+            "llama3.2:3b",
         ).strip()
 
         # -----------------------------------------------------
