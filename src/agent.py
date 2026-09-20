@@ -225,10 +225,7 @@ class EvidenceAgent:
 
             results = self.rag.retrieve(
                 query,
-                top_k=max(
-                    2,
-                    self.top_k // 2,
-                ),
+                top_k = self.top_k,
                 min_score=self.min_score,
             )
 
