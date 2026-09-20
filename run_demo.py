@@ -97,8 +97,7 @@ def main():
     # ---------------------------------------------------------
 
     question = (
-        "What cell populations were enriched "
-        "for PSC genetic risk?"
+        "What is Primary Sclerosing Cholangitis?"
     )
 
     print()
