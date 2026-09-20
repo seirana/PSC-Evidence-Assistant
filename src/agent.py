@@ -170,21 +170,50 @@ class EvidenceAgent:
             plan_text
         )
 
-        # If query rewriting fails, simply use
-        # the original question.
-        if not plan:
+        # The model may return valid JSON with the wrong
+        # shape (for example, a list or a JSON Schema).
+        # Normalize the result before using dictionary
+        # methods such as .get().
+        if not isinstance(plan, dict):
+            plan = {}
 
-            plan = {
-                "rewritten_queries": [
-                    user_question
-                ],
-                "entities_of_interest": [],
-            }
-
-        rewritten_queries = (
-            plan.get("rewritten_queries")
-            or []
+        raw_queries = plan.get(
+            "rewritten_queries",
+            [],
         )
+
+        if not isinstance(raw_queries, list):
+            raw_queries = []
+
+        rewritten_queries = [
+            query.strip()
+            for query in raw_queries
+            if isinstance(query, str)
+            and query.strip()
+        ]
+
+        if not rewritten_queries:
+            rewritten_queries = [
+                user_question
+            ]
+
+        raw_entities = plan.get(
+            "entities_of_interest",
+            [],
+        )
+
+        if not isinstance(raw_entities, list):
+            raw_entities = []
+
+        plan = {
+            "rewritten_queries": rewritten_queries[:5],
+            "entities_of_interest": [
+                entity.strip()
+                for entity in raw_entities
+                if isinstance(entity, str)
+                and entity.strip()
+            ],
+        }
 
         # =====================================================
         # IMPORTANT SAFETY / ROBUSTNESS CHANGE
@@ -324,12 +353,42 @@ class EvidenceAgent:
             facts_text
         )
 
-        if not facts:
+        # Valid JSON is not necessarily the expected JSON
+        # object. A small local model may return a list even
+        # though the prompt requests an object. Graph facts
+        # are optional, so malformed output must not stop the
+        # evidence-answering pipeline.
+        if not isinstance(facts, dict):
+            facts = {}
 
-            facts = {
-                "entities": [],
-                "relations": [],
-            }
+        fact_entities = facts.get(
+            "entities",
+            [],
+        )
+
+        fact_relations = facts.get(
+            "relations",
+            [],
+        )
+
+        if not isinstance(fact_entities, list):
+            fact_entities = []
+
+        if not isinstance(fact_relations, list):
+            fact_relations = []
+
+        facts = {
+            "entities": [
+                entity
+                for entity in fact_entities
+                if isinstance(entity, dict)
+            ],
+            "relations": [
+                relation
+                for relation in fact_relations
+                if isinstance(relation, dict)
+            ],
+        }
 
         # =====================================================
         # 7. UPDATE KNOWLEDGE GRAPH
@@ -431,7 +490,13 @@ class EvidenceAgent:
         #     supported = False
         # =====================================================
 
-        if not verify:
+        if (
+            not isinstance(verify, dict)
+            or not isinstance(
+                verify.get("supported"),
+                bool,
+            )
+        ):
 
             verify = {
                 "supported": False,
