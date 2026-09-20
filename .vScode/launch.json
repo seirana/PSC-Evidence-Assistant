@@ -1,0 +1,14 @@
+	
+version	"0.2.0"
+configurations	
+0	
+name	"PSC Demo with Llama 3.2"
+type	"debugpy"
+request	"launch"
+program	"${workspaceFolder}/run_demo.py"
+cwd	"${workspaceFolder}"
+console	"integratedTerminal"
+env	
+LLM_MODE	"ollama"
+OLLAMA_MODEL	"llama3.2:3b"
+LLM_HTTP_TIMEOUT	"600"
