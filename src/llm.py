@@ -209,6 +209,8 @@ class LLMClient:
             "stream": False,
             "options": {
                 "temperature": self.temperature,
+                "num_ctx": 4096,
+                "num_predict": 512,
             },
         }
 
