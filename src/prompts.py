@@ -135,9 +135,19 @@ Good retrieval queries may:
 
 Do not invent new entities or claims.
 
-Return ONLY valid JSON following this schema:
+Return ONLY valid JSON in exactly this form:
 
-{QueryPlan.model_json_schema()}
+{{
+  "rewritten_queries": ["short query"],
+  "entities_of_interest": ["entity name"]
+}}
+
+OUTPUT RULES:
+- Do not return a JSON Schema.
+- Do not return keys named description, properties, title, type, items, or required.
+- Each array element must be a plain JSON string, never an object.
+- rewritten_queries must contain between 1 and 5 strings.
+- entities_of_interest may be an empty array.
 
 User question:
 {user_question}
@@ -195,11 +205,17 @@ Macrophage-lineage populations were enriched for PSC genetic risk (abc123_0007).
    - answer only the supported part,
    - do not fill in the missing information.
 
-9. If the CONTEXT does not contain enough information to answer the question, respond exactly:
+9. Examine every retrieved chunk. Reference-list entries do not cancel useful
+   explanatory evidence found in another chunk.
+
+10. If any chunk directly defines or answers what the user asked, provide that
+    supported answer rather than saying it was not found.
+
+11. If the CONTEXT does not contain enough information to answer the question, respond exactly:
 
 Not found in provided documents.
 
-10. Keep the answer concise, technical, and faithful to the wording and level of certainty in the source material.
+12. Keep the answer concise, technical, and faithful to the wording and level of certainty in the source material.
 
 USER QUESTION:
 {user_question}
@@ -253,11 +269,35 @@ RELATION RULES:
 - evidence_chunk_id must exactly match a chunk ID appearing in a SOURCE header.
 - Do not create a relationship merely because two entities occur in the same paragraph.
 
-Return ONLY valid JSON following this schema:
+Return ONLY valid JSON in exactly this form:
 
-{GraphFacts.model_json_schema()}
+{{
+  "entities": [
+    {{
+      "type": "Disease",
+      "name": "entity name",
+      "normalized_id": null
+    }}
+  ],
+  "relations": [
+    {{
+      "source": "source entity",
+      "relation": "ASSOCIATED_WITH",
+      "target": "target entity",
+      "evidence_chunk_id": "exact chunk ID from a SOURCE header"
+    }}
+  ]
+}}
 
-If there are no reliable entities or relations, return valid JSON with empty lists.
+OUTPUT RULES:
+- Do not return a JSON Schema.
+- Do not return keys named description, properties, title, items, or required.
+- Allowed entity types are Disease, Gene, CellType, Method, Dataset, Parameter,
+  Output, Input, Pathway, Drug, and Other.
+- Allowed relations are ASSOCIATED_WITH, TARGETS, TREATS, USED_IN,
+  REQUIRES_INPUT, PRODUCES_OUTPUT, PART_OF, and MENTIONED_IN.
+- If there are no reliable entities or relations, return:
+  {{"entities": [], "relations": []}}
 
 CONTEXT:
 {context}
@@ -314,9 +354,20 @@ STRICT VERIFICATION RULES:
 
 9. Keep "notes" short and factual.
 
-Return ONLY valid JSON following this schema:
+Return ONLY valid JSON in exactly this form:
 
-{GroundingCheck.model_json_schema()}
+{{
+  "supported": true,
+  "unsupported_claims": [],
+  "notes": "short explanation"
+}}
+
+OUTPUT RULES:
+- Do not return a JSON Schema.
+- Do not return keys named description, properties, title, type, items, or required.
+- supported must be the JSON Boolean true or false, not a string or an object.
+- unsupported_claims must be an array of plain strings.
+- notes must be a plain string.
 
 ANSWER:
 {answer}
