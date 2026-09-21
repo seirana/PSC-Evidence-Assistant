@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 from typing import List, Dict, Tuple
 
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -65,6 +66,17 @@ class TfidfRAG:
             for record in self.records
         ]
 
+        # Build a glossary from the corpus itself. Examples:
+        #
+        #   Example Long Name (ELN)
+        #   Adaptive Evidence Framework (AEF)
+        #
+        # This avoids maintaining a hard-coded list of terms or
+        # trying to predict the questions users might ask.
+        self.glossary = self._extract_glossary(
+            self.texts
+        )
+
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
             stop_words="english",
@@ -88,6 +100,121 @@ class TfidfRAG:
                 # Example:
                 # The corpus exists but contains no usable words.
                 self.matrix = None
+
+    @staticmethod
+    def _extract_glossary(
+        texts: List[str],
+    ) -> Dict[str, str]:
+        """Extract ``Expanded Name (short name)`` pairs."""
+
+        glossary: Dict[str, str] = {}
+
+        # Require title-style words in the expanded form. This
+        # intentionally favors headings and formal definitions
+        # over arbitrary parenthetical text in prose.
+        pair_pattern = re.compile(
+            r"(?P<long>[A-Z][A-Za-z0-9-]*"
+            r"(?:\s+(?:[A-Z][A-Za-z0-9-]*|of|and|for|"
+            r"in|the|to)){1,11})"
+            r"\s*\(\s*"
+            r"(?P<short>[A-Za-z][A-Za-z0-9-]{1,20})"
+            r"\s*\)"
+        )
+
+        for text in texts:
+            for raw_line in text.splitlines():
+                line = " ".join(
+                    raw_line.strip().lstrip("#").split()
+                )
+                line = re.sub(
+                    r"^\d+(?:\.\d+)*\s+",
+                    "",
+                    line,
+                )
+
+                for match in pair_pattern.finditer(line):
+                    short_name = match.group(
+                        "short"
+                    ).strip()
+                    long_name = match.group(
+                        "long"
+                    ).strip(" -:;")
+
+                    if short_name.casefold() == long_name.casefold():
+                        continue
+
+                    glossary.setdefault(
+                        short_name.casefold(),
+                        long_name,
+                    )
+
+        return glossary
+
+    def expand_query(
+        self,
+        query: str,
+    ) -> str:
+        """
+        Append corpus-derived expansions for names in a query.
+
+        The original wording is retained. Therefore a question
+        about the meaning of an abbreviation remains intact,
+        while retrieval also sees its expanded form.
+        """
+
+        expanded = " ".join(
+            (query or "").split()
+        )
+
+        if not expanded:
+            return ""
+
+        additions = []
+
+        for short_name, long_name in self.glossary.items():
+            if not re.search(
+                rf"(?<!\w){re.escape(short_name)}(?!\w)",
+                expanded,
+                flags=re.IGNORECASE,
+            ):
+                continue
+
+            if long_name.casefold() in expanded.casefold():
+                continue
+
+            additions.append(long_name)
+
+        if additions:
+            expanded += " " + " ".join(additions)
+
+        return expanded
+
+    def replace_query_aliases(
+        self,
+        query: str,
+    ) -> str:
+        """Replace corpus-defined aliases for definition matching."""
+
+        resolved = " ".join(
+            (query or "").split()
+        )
+
+        for short_name, long_name in sorted(
+            self.glossary.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            if long_name.casefold() in resolved.casefold():
+                continue
+
+            resolved = re.sub(
+                rf"(?<!\w){re.escape(short_name)}(?!\w)",
+                long_name,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+        return resolved
 
     def retrieve(
         self,
@@ -142,8 +269,12 @@ class TfidfRAG:
         # TF-IDF vector space as the document chunks.
         # ---------------------------------------------
 
+        expanded_query = self.expand_query(
+            query
+        )
+
         query_vector = self.vectorizer.transform(
-            [query]
+            [expanded_query]
         )
 
         # nnz = number of non-zero values.
@@ -210,6 +341,129 @@ class TfidfRAG:
                 break
 
         return retrieved
+
+    def retrieve_term_definitions(
+        self,
+        term: str,
+        top_k: int = 3,
+    ) -> List[RetrievedChunk]:
+        """
+        Find chunks that explicitly expand or define a term.
+
+        A normal TF-IDF query can miss a heading such as::
+
+            Expanded Method Name (EMN)
+
+        when the same short term appears many times elsewhere
+        in the document. This method uses only exact text
+        patterns; it does not infer or invent an expansion.
+        The returned score remains the term's ordinary TF-IDF
+        cosine similarity so citation metadata stays honest.
+        """
+
+        cleaned_term = " ".join(
+            (term or "").split()
+        ).strip(" ?.!,:;")
+
+        if (
+            not cleaned_term
+            or not self.records
+            or self.matrix is None
+            or top_k <= 0
+        ):
+            return []
+
+        escaped = re.escape(
+            cleaned_term
+        )
+
+        explicit_patterns = (
+            # "X stands for ..." and similar prose.
+            re.compile(
+                rf"(?<!\w){escaped}(?!\w)\s+"
+                r"(?:stands\s+for|means|is\s+short\s+for|"
+                r"is\s+an?\s+abbreviation\s+for)\b",
+                flags=re.IGNORECASE,
+            ),
+            # "Expanded Name (X)" in a heading or sentence.
+            re.compile(
+                rf"[^()\n]{{2,120}}\(\s*{escaped}\s*\)",
+                flags=re.IGNORECASE,
+            ),
+            # "X: descriptive title" at the start of a line.
+            re.compile(
+                rf"^\s*{escaped}\s*:\s*\S.+$",
+                flags=(
+                    re.IGNORECASE
+                    | re.MULTILINE
+                ),
+            ),
+        )
+
+        query_vector = self.vectorizer.transform(
+            [cleaned_term]
+        )
+
+        if query_vector.nnz == 0:
+            similarities = None
+        else:
+            similarities = cosine_similarity(
+                query_vector,
+                self.matrix,
+            ).ravel()
+
+        matches = []
+
+        for index, record in enumerate(
+            self.records
+        ):
+            text = record.get(
+                "text",
+                "",
+            )
+
+            pattern_rank = None
+
+            for rank, pattern in enumerate(
+                explicit_patterns
+            ):
+                if pattern.search(text):
+                    pattern_rank = rank
+                    break
+
+            if pattern_rank is None:
+                continue
+
+            score = (
+                float(similarities[index])
+                if similarities is not None
+                else 0.0
+            )
+
+            matches.append(
+                (
+                    pattern_rank,
+                    -score,
+                    RetrievedChunk(
+                        doc_path=record["doc_path"],
+                        chunk_id=record["chunk_id"],
+                        score=score,
+                        text=text,
+                    ),
+                )
+            )
+
+        matches.sort(
+            key=lambda item: (
+                item[0],
+                item[1],
+            )
+        )
+
+        return [
+            item[2]
+            for item in matches[:top_k]
+        ]
 
 
 def format_context(

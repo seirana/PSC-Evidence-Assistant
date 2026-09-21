@@ -133,6 +133,10 @@ Good retrieval queries may:
 - include important gene, disease, cell-type, drug, method, or dataset names,
 - use closely related wording already implied by the user's question.
 
+If the question contains multiple parts, create at least one
+separate retrieval query for each part. Resolve pronouns such
+as "it" by repeating the entity name from the question.
+
 Do not invent new entities or claims.
 
 Return ONLY valid JSON in exactly this form:
@@ -162,10 +166,28 @@ User question:
 def prompt_answer_with_citations(
     user_question: str,
     context: str,
+    question_facets: Optional[List[str]] = None,
 ) -> str:
     """
     Ask the LLM to answer using ONLY retrieved evidence.
     """
+
+    facets = list(
+        question_facets or []
+    )
+
+    if len(facets) > 1:
+        # The first entry is the complete question; subsequent
+        # entries are the individual retrieval facets.
+        facets = facets[1:]
+
+    facets_text = "\n".join(
+        f"- {facet}"
+        for facet in facets
+    )
+
+    if not facets_text:
+        facets_text = f"- {user_question}"
 
     return f"""
 You are an evidence-grounded scientific assistant.
@@ -174,6 +196,9 @@ You must answer the USER QUESTION using ONLY information explicitly supported by
 
 USER QUESTION:
 {user_question}
+
+QUESTION PARTS TO CHECK SEPARATELY:
+{facets_text}
 
 The CONTEXT contains excerpts retrieved from documents in the local corpus.
 
@@ -208,21 +233,32 @@ Macrophage-lineage populations were enriched for PSC genetic risk (abc123_0007).
    - answer only the supported part,
    - do not fill in the missing information.
 
-9. Examine every retrieved chunk. Reference-list entries do not cancel useful
+9. A multi-part question may require evidence from different chunks.
+   Check every question part separately and combine the supported parts.
+
+10. Examine every retrieved chunk. Reference-list entries do not cancel useful
    explanatory evidence found in another chunk.
 
-10. If any chunk directly defines or answers what the user asked, provide that
+11. If any chunk directly defines or answers what the user asked, provide that
     supported answer rather than saying it was not found.
 
-11. Read explanatory chunks before deciding to abstain. A bibliography chunk
+12. A heading in the form "Expanded Name (Short Name)" is direct evidence of
+    what the short name stands for.
+
+13. If the wording of the question assumes a relationship that the CONTEXT
+    contradicts, correct the premise using the CONTEXT. Do not abstain merely
+    because the premise was inaccurate.
+
+14. Read explanatory chunks before deciding to abstain. A bibliography chunk
     containing titles and URLs is neither positive nor negative evidence about
     whether another chunk answers the question.
 
-12. If the CONTEXT does not contain enough information to answer the question, respond exactly:
+15. If the CONTEXT does not contain enough information to answer any part of
+    the question, respond exactly:
 
 Not found in provided documents.
 
-13. Keep the answer concise, technical, and faithful to the wording and level of certainty in the source material.
+16. Keep the answer concise, technical, and faithful to the wording and level of certainty in the source material.
 
 CONTEXT:
 {context}
