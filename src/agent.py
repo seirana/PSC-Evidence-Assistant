@@ -1,10 +1,5 @@
 import re
-from typing import (
-    Dict,
-    Any,
-    List,
-    Optional,
-)
+from typing import Dict, Any, List, Optional
 
 from .rag import (
     TfidfRAG,
@@ -30,179 +25,51 @@ from .graph_kb import KnowledgeGraph
 NOT_FOUND_MESSAGE = "Not found in provided documents."
 
 
-def _normalize_question_for_retrieval(
+# These aliases clarify the user's wording for retrieval.
+# They do not supply answer content: every answer must still
+# come from a retrieved document chunk.
+KNOWN_ABBREVIATIONS = {
+    "PSC": "Primary Sclerosing Cholangitis",
+}
+
+
+def _expand_known_abbreviations(
     question: str,
 ) -> str:
     """
-    Normalize harmless punctuation mistakes for retrieval.
+    Expand known domain abbreviations before retrieval.
 
-    For example, users sometimes type::
+    A short lexical query such as "What is PSC?" otherwise
+    gives TF-IDF only the broad token "PSC". That token occurs
+    throughout the corpus, including in drug-ranking passages.
+    Expanding it lets retrieval and the direct-definition
+    matcher search for the disease name the user intended.
 
-        What does ABC? stand for ...
-
-    The question mark separates the term from "stand for"
-    and makes an already short lexical query less reliable.
-    Only this specific grammatical pattern is repaired; real
-    sentence-ending question marks are left unchanged.
+    The original question is still preserved in the returned
+    result, and all answer text must still come from evidence.
     """
 
-    normalized = " ".join(
+    expanded = " ".join(
         (question or "").split()
     )
 
-    return re.sub(
-        r"(?i)(\bwhat\s+does\s+[^?]{1,100})"
-        r"\?\s+(stand\s+for\b)",
-        r"\1 \2",
-        normalized,
-    )
+    for abbreviation, full_name in (
+        KNOWN_ABBREVIATIONS.items()
+    ):
+        # Do not turn an already explicit phrase such as
+        # "Primary Sclerosing Cholangitis (PSC)" into a
+        # duplicated phrase.
+        if full_name.casefold() in expanded.casefold():
+            continue
 
-
-def _stand_for_term(
-    question: str,
-) -> str:
-    """Return the term in a "What does X stand for?" query."""
-
-    normalized = _normalize_question_for_retrieval(
-        question
-    )
-
-    match = re.search(
-        r"(?i)\bwhat\s+does\s+(.+?)\s+stand\s+for\b",
-        normalized,
-    )
-
-    if match is None:
-        return ""
-
-    term = match.group(1).strip(
-        " ?.!,:;\"'"
-    )
-
-    # A very long capture is probably not a name or acronym.
-    if not term or len(term.split()) > 8:
-        return ""
-
-    return term
-
-
-def _question_facets(
-    question: str,
-) -> List[str]:
-    """
-    Split a compound question into deterministic search facets.
-
-    Query rewriting by the LLM is still used, but retrieval must
-    not depend on a small model noticing that two different
-    pieces of evidence are required.
-    """
-
-    normalized = _normalize_question_for_retrieval(
-        question
-    )
-    facets = [normalized] if normalized else []
-
-    match = re.search(
-        r"(?i)\s+and\s+"
-        r"(?=(?:how|what|why|where|when|which)\b)",
-        normalized,
-    )
-
-    if match is None:
-        return facets
-
-    first = normalized[:match.start()].strip(
-        " ?.!,:;"
-    )
-    second = normalized[match.end():].strip(
-        " ?.!,:;"
-    )
-
-    term = _stand_for_term(
-        normalized
-    )
-
-    if term and second:
-        # Resolve the first pronoun in a clause such as
-        # "how is it used ..." so TF-IDF sees the entity name.
-        second = re.sub(
-            r"(?i)\bit\b",
-            term,
-            second,
-            count=1,
-        )
-
-        if term.casefold() not in second.casefold():
-            second = f"{term} {second}"
-
-    for facet in (first, second):
-        if facet and facet not in facets:
-            facets.append(facet)
-
-    return facets
-
-
-def _extract_term_expansion(
-    term: str,
-    chunk: RetrievedChunk,
-) -> str:
-    """
-    Extract "Expanded Name" from "Expanded Name (TERM)".
-
-    The extraction is intentionally narrow so the code cannot
-    manufacture an acronym expansion from general knowledge.
-    """
-
-    if not term:
-        return ""
-
-    escaped = re.escape(term)
-
-    for line in chunk.text.splitlines():
-        cleaned = " ".join(
-            line.split()
-        ).strip()
-        cleaned = re.sub(
-            r"^\d+(?:\.\d+)*\s+",
-            "",
-            cleaned,
-        )
-
-        match = re.fullmatch(
-            rf"(.{{2,120}}?)\s*\(\s*{escaped}\s*\)\s*",
-            cleaned,
+        expanded = re.sub(
+            rf"\b{re.escape(abbreviation)}\b",
+            full_name,
+            expanded,
             flags=re.IGNORECASE,
         )
 
-        if match is None:
-            continue
-
-        expansion = match.group(1).strip(
-            " -:;"
-        )
-
-        if expansion:
-            return expansion
-
-    return ""
-
-
-def _is_term_expansion_chunk(
-    question: str,
-    chunk: RetrievedChunk,
-) -> bool:
-    """Return True when a chunk explicitly expands the term."""
-
-    term = _stand_for_term(
-        question
-    )
-
-    return bool(
-        _extract_term_expansion(
-            term,
-            chunk,
-        )
-    )
+    return expanded
 
 
 def _parse_model_output(
@@ -249,12 +116,14 @@ def _question_subject(
     Extract the subject from a direct definition question.
 
     Example:
-        "What is Example Process?"
-        -> "example process"
+        "What is Primary Sclerosing Cholangitis?"
+        -> "primary sclerosing cholangitis"
     """
 
     normalized = " ".join(
-        (question or "").casefold().split()
+        _expand_known_abbreviations(
+            question
+        ).casefold().split()
     ).strip()
 
     prefixes = (
@@ -335,17 +204,10 @@ def _order_context_chunks(
     return sorted(
         chunks,
         key=lambda chunk: (
-            0
-            if _is_term_expansion_chunk(
+            not _is_direct_answer_chunk(
                 question,
                 chunk,
-            )
-            else 1
-            if _is_direct_answer_chunk(
-                question,
-                chunk,
-            )
-            else 2,
+            ),
             _looks_like_references(
                 chunk
             ),
@@ -410,8 +272,8 @@ def _extract_direct_answer(
     # Prefer text immediately below a matching section
     # heading, for example:
     #
-        #   ## What is Example Process?
-        #   Example Process is ...
+    #   ## What is Primary Sclerosing Cholangitis?
+    #   Primary sclerosing cholangitis is ...
     for index, paragraph in enumerate(
         paragraphs
     ):
@@ -654,28 +516,12 @@ class EvidenceAgent:
                 note="The question was empty.",
             )
 
-        # Normalize only harmless punctuation. Terminology is
-        # resolved from definitions discovered in the corpus,
-        # not from a hard-coded list of anticipated questions.
+        # Resolve known abbreviations deterministically before
+        # asking the LLM to plan retrieval. This prevents a
+        # small model from having to guess what PSC means.
         retrieval_question = (
-            _normalize_question_for_retrieval(
+            _expand_known_abbreviations(
                 user_question
-            )
-        )
-
-        stand_for_term = _stand_for_term(
-            retrieval_question
-        )
-
-        # Direct "What is X?" matching benefits from replacing
-        # a corpus-defined alias such as PSC with its full name.
-        # For "What does X stand for?", keep X unchanged so its
-        # explicit expansion heading can be recognized.
-        matching_question = (
-            retrieval_question
-            if stand_for_term
-            else self.rag.replace_query_aliases(
-                retrieval_question
             )
         )
 
@@ -728,26 +574,9 @@ class EvidenceAgent:
         # completely replace what the user actually asked.
         # =====================================================
 
-        question_facets = _question_facets(
+        queries = [
             retrieval_question
-        )
-
-        queries = list(
-            question_facets
-        )
-
-        # Add corpus-derived terminology to each facet. The
-        # original facet remains present, so this is query
-        # expansion rather than question-specific replacement.
-        for facet in question_facets:
-            expanded_facet = self.rag.expand_query(
-                facet
-            )
-
-            if expanded_facet not in queries:
-                queries.append(
-                    expanded_facet
-                )
+        ]
 
         # Also keep the literal wording when it differs. The
         # expanded form is searched first because it carries
@@ -770,56 +599,25 @@ class EvidenceAgent:
             if query not in queries:
                 queries.append(query)
 
-        # Keep the retrieval work bounded while leaving room for
-        # the original question, its facets, corpus expansions,
-        # and useful LLM rewrites.
-        queries = queries[:8]
+        # Use a maximum of 3 retrieval queries.
+        queries = queries[:3]
 
         # =====================================================
         # 2. RETRIEVE EVIDENCE
         # =====================================================
 
         retrieved_all = []
-        results_by_query = []
-
-        candidate_k = max(
-            self.top_k * 3,
-            12,
-        )
 
         for query in queries:
 
             results = self.rag.retrieve(
                 query,
-                top_k=candidate_k,
+                top_k = self.top_k,
                 min_score=self.min_score,
             )
 
             retrieved_all.extend(
                 results
-            )
-
-            results_by_query.append(
-                results
-            )
-
-        # A short name can appear throughout a paper, causing
-        # its explicit expansion heading to have a low TF-IDF
-        # score. Search exact definition patterns separately;
-        # this method returns only text actually present in the
-        # corpus and never guesses the expansion.
-        definition_results = []
-
-        if stand_for_term:
-            definition_results = (
-                self.rag.retrieve_term_definitions(
-                    stand_for_term,
-                    top_k=3,
-                )
-            )
-
-            retrieved_all.extend(
-                definition_results
             )
 
         # =====================================================
@@ -847,47 +645,11 @@ class EvidenceAgent:
                     retrieved_chunk.chunk_id
                 ] = retrieved_chunk
 
-        # Preserve evidence coverage across question facets.
-        # A single globally sorted list can otherwise devote all
-        # available slots to one half of a compound question.
-        selected = []
-        selected_ids = set()
-
-        def add_selected(
-            chunk: RetrievedChunk,
-        ) -> None:
-            if chunk.chunk_id in selected_ids:
-                return
-
-            selected.append(
-                best.get(
-                    chunk.chunk_id,
-                    chunk,
-                )
-            )
-            selected_ids.add(
-                chunk.chunk_id
-            )
-
-        for chunk in definition_results:
-            add_selected(chunk)
-
-        for results in results_by_query:
-            if results:
-                add_selected(
-                    results[0]
-                )
-
-        for chunk in _order_context_chunks(
-            matching_question,
-            list(best.values()),
-        ):
-            add_selected(chunk)
-
-        retrieved = _order_context_chunks(
-            matching_question,
-            selected[:self.top_k],
-        )
+        retrieved = sorted(
+            best.values(),
+            key=lambda chunk: chunk.score,
+            reverse=True,
+        )[:self.top_k]
 
         # =====================================================
         # 4. VERY IMPORTANT:
@@ -912,7 +674,7 @@ class EvidenceAgent:
         # =====================================================
 
         context_chunks = _order_context_chunks(
-            matching_question,
+            retrieval_question,
             retrieved,
         )
 
@@ -1026,7 +788,7 @@ class EvidenceAgent:
             chunk
             for chunk in context_chunks
             if _is_direct_answer_chunk(
-                matching_question,
+                retrieval_question,
                 chunk,
             )
         ]
@@ -1036,7 +798,7 @@ class EvidenceAgent:
 
         for chunk in direct_chunks:
             candidate = _extract_direct_answer(
-                matching_question,
+                retrieval_question,
                 chunk,
             )
 
@@ -1050,9 +812,9 @@ class EvidenceAgent:
         )
 
         if used_exact_extract:
-            # This is a general direct-definition path. The text
-            # is copied from one matching evidence chunk rather
-            # than generated from a stored answer.
+            # The answer consists only of text extracted from
+            # one retrieved chunk. Use its real citation and do
+            # not let a second LLM reinterpret or reject it.
             answer_text = extractive_answer
             context, citations = format_context(
                 [extractive_chunk],
@@ -1063,7 +825,6 @@ class EvidenceAgent:
             answer_prompt = prompt_answer_with_citations(
                 retrieval_question,
                 context,
-                question_facets=question_facets,
             )
 
             answer_text = self.llm.generate(
@@ -1088,9 +849,6 @@ class EvidenceAgent:
                     prompt_answer_with_citations(
                         retrieval_question,
                         focused_context,
-                        question_facets=(
-                            question_facets
-                        ),
                     )
                 )
 

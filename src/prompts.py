@@ -260,11 +260,68 @@ Not found in provided documents.
 
 16. Keep the answer concise, technical, and faithful to the wording and level of certainty in the source material.
 
+17. Before returning the answer, check that every paragraph containing a
+    factual claim includes at least one exact chunk_id citation.
+
 CONTEXT:
 {context}
 
 FINAL TASK:
 Answer this question using the context above: {user_question}
+""".strip()
+
+
+def prompt_repair_answer_with_citations(
+    user_question: str,
+    answer: str,
+    context: str,
+    unsupported_claims: Optional[List[str]] = None,
+) -> str:
+    """
+    Repair a draft that failed grounding verification.
+
+    The repair receives the same evidence and may only remove,
+    narrow, or correctly cite claims. It must not add facts.
+    """
+
+    claims = unsupported_claims or []
+    claims_text = "\n".join(
+        f"- {claim}"
+        for claim in claims
+    )
+
+    if not claims_text:
+        claims_text = "- No specific claim was identified."
+
+    return f"""
+You are repairing an evidence-grounded answer that failed verification.
+
+USER QUESTION:
+{user_question}
+
+DRAFT ANSWER:
+{answer}
+
+CLAIMS FLAGGED BY THE VERIFIER:
+{claims_text}
+
+CONTEXT:
+{context}
+
+REPAIR RULES:
+1. Use only the CONTEXT.
+2. Preserve claims that are directly supported.
+3. Remove or narrow claims that are not directly supported.
+4. Add an exact chunk_id citation in parentheses to every factual claim.
+5. A heading of the form "Expanded Name (Short Name)" directly supports
+   the statement "Short Name stands for Expanded Name."
+6. If the question assumes a relationship contradicted by the CONTEXT,
+   correct that premise using the CONTEXT.
+7. Do not discuss the repair process.
+8. Return only the repaired answer, without JSON or Markdown fences.
+9. If no part of the question can be answered, return exactly:
+
+Not found in provided documents.
 """.strip()
 
 
@@ -381,12 +438,17 @@ STRICT VERIFICATION RULES:
 5. Check that each cited chunk actually supports the claim associated with it.
 
 6. A faithful paraphrase is supported; the answer does not need to copy the
-   context word for word.
+   context word for word. Never reject a claim merely because it is phrased
+   differently from the source.
 
-7. Bibliography entries elsewhere in the context do not invalidate a claim
+7. A heading of the form "Expanded Name (Short Name)" directly supports
+   the claim "Short Name stands for Expanded Name." This is a faithful
+   restatement, not an unsupported inference.
+
+8. Bibliography entries elsewhere in the context do not invalidate a claim
    that is directly supported by an explanatory chunk.
 
-8. If the answer:
+9. If the answer:
    - adds information not present in the CONTEXT,
    - overstates the evidence,
    - makes an unsupported inference,
@@ -395,16 +457,16 @@ STRICT VERIFICATION RULES:
 
    then the supported claim must be false.
 
-9. If even one substantive factual claim is unsupported, set:
+10. If even one substantive factual claim is unsupported, set:
 
    "supported": false
 
-10. Put unsupported statements in "unsupported_claims".
+11. Put unsupported statements in "unsupported_claims".
 
-11. If every substantive claim is supported and every citation is valid, set
+12. If every substantive claim is supported and every citation is valid, set
     "supported": true.
 
-12. Keep "notes" short and factual.
+13. Keep "notes" short and factual.
 
 Return ONLY valid JSON in exactly this form:
 
