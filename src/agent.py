@@ -1,5 +1,11 @@
 import re
-from typing import Dict, Any, List, Optional
+from typing import (
+    Dict,
+    Any,
+    List,
+    Optional,
+    Tuple,
+)
 
 from .rag import (
     TfidfRAG,
@@ -13,6 +19,7 @@ from .prompts import (
     GroundingCheck,
     prompt_query_rewrite,
     prompt_answer_with_citations,
+    prompt_repair_answer_with_citations,
     prompt_extract_graph_facts,
     prompt_grounding_verify,
 )
@@ -25,51 +32,485 @@ from .graph_kb import KnowledgeGraph
 NOT_FOUND_MESSAGE = "Not found in provided documents."
 
 
-# These aliases clarify the user's wording for retrieval.
-# They do not supply answer content: every answer must still
-# come from a retrieved document chunk.
-KNOWN_ABBREVIATIONS = {
-    "PSC": "Primary Sclerosing Cholangitis",
-}
-
-
-def _expand_known_abbreviations(
+def _normalize_question_for_retrieval(
     question: str,
 ) -> str:
     """
-    Expand known domain abbreviations before retrieval.
+    Normalize harmless punctuation mistakes for retrieval.
 
-    A short lexical query such as "What is PSC?" otherwise
-    gives TF-IDF only the broad token "PSC". That token occurs
-    throughout the corpus, including in drug-ranking passages.
-    Expanding it lets retrieval and the direct-definition
-    matcher search for the disease name the user intended.
+    For example, users sometimes type::
 
-    The original question is still preserved in the returned
-    result, and all answer text must still come from evidence.
+        What does ABC? stand for ...
+
+    The question mark separates the term from "stand for"
+    and makes an already short lexical query less reliable.
+    Only this specific grammatical pattern is repaired; real
+    sentence-ending question marks are left unchanged.
     """
 
-    expanded = " ".join(
+    normalized = " ".join(
         (question or "").split()
     )
 
-    for abbreviation, full_name in (
-        KNOWN_ABBREVIATIONS.items()
-    ):
-        # Do not turn an already explicit phrase such as
-        # "Primary Sclerosing Cholangitis (PSC)" into a
-        # duplicated phrase.
-        if full_name.casefold() in expanded.casefold():
-            continue
+    return re.sub(
+        r"(?i)(\bwhat\s+does\s+[^?]{1,100})"
+        r"\?\s+(stand\s+for\b)",
+        r"\1 \2",
+        normalized,
+    )
 
-        expanded = re.sub(
-            rf"\b{re.escape(abbreviation)}\b",
-            full_name,
-            expanded,
+
+def _stand_for_term(
+    question: str,
+) -> str:
+    """Return the term in a "What does X stand for?" query."""
+
+    normalized = _normalize_question_for_retrieval(
+        question
+    )
+
+    match = re.search(
+        r"(?i)\bwhat\s+does\s+(.+?)\s+stand\s+for\b",
+        normalized,
+    )
+
+    if match is None:
+        return ""
+
+    term = match.group(1).strip(
+        " ?.!,:;\"'"
+    )
+
+    # A very long capture is probably not a name or acronym.
+    if not term or len(term.split()) > 8:
+        return ""
+
+    return term
+
+
+def _question_facets(
+    question: str,
+) -> List[str]:
+    """
+    Split a compound question into deterministic search facets.
+
+    Query rewriting by the LLM is still used, but retrieval must
+    not depend on a small model noticing that two different
+    pieces of evidence are required.
+    """
+
+    normalized = _normalize_question_for_retrieval(
+        question
+    )
+    facets = [normalized] if normalized else []
+
+    match = re.search(
+        r"(?i)\s+and\s+"
+        r"(?=(?:how|what|why|where|when|which)\b)",
+        normalized,
+    )
+
+    if match is None:
+        return facets
+
+    first = normalized[:match.start()].strip(
+        " ?.!,:;"
+    )
+    second = normalized[match.end():].strip(
+        " ?.!,:;"
+    )
+
+    term = _stand_for_term(
+        normalized
+    )
+
+    if term and second:
+        # Resolve the first pronoun in a clause such as
+        # "how is it used ..." so TF-IDF sees the entity name.
+        second = re.sub(
+            r"(?i)\bit\b",
+            term,
+            second,
+            count=1,
+        )
+
+        if term.casefold() not in second.casefold():
+            second = f"{term} {second}"
+
+    for facet in (first, second):
+        if facet and facet not in facets:
+            facets.append(facet)
+
+    return facets
+
+
+def _extract_term_expansion(
+    term: str,
+    chunk: RetrievedChunk,
+) -> str:
+    """
+    Extract "Expanded Name" from "Expanded Name (TERM)".
+
+    The extraction is intentionally narrow so the code cannot
+    manufacture an acronym expansion from general knowledge.
+    """
+
+    if not term:
+        return ""
+
+    escaped = re.escape(term)
+
+    for line in chunk.text.splitlines():
+        cleaned = " ".join(
+            line.split()
+        ).strip()
+        cleaned = re.sub(
+            r"^\d+(?:\.\d+)*\s+",
+            "",
+            cleaned,
+        )
+
+        match = re.fullmatch(
+            rf"(.{{2,120}}?)\s*\(\s*{escaped}\s*\)\s*",
+            cleaned,
             flags=re.IGNORECASE,
         )
 
-    return expanded
+        if match is None:
+            continue
+
+        expansion = match.group(1).strip(
+            " -:;"
+        )
+
+        if expansion:
+            return expansion
+
+    return ""
+
+
+def _is_term_expansion_chunk(
+    question: str,
+    chunk: RetrievedChunk,
+) -> bool:
+    """Return True when a chunk explicitly expands the term."""
+
+    term = _stand_for_term(
+        question
+    )
+
+    return bool(
+        _extract_term_expansion(
+            term,
+            chunk,
+        )
+    )
+
+
+def _normalize_source_text(
+    text: str,
+    term: str = "",
+) -> str:
+    """Clean PDF line wrapping without changing its meaning."""
+
+    cleaned = re.sub(
+        r"(?<=\w)-\s*\n\s*(?=\w)",
+        "",
+        text or "",
+    )
+    cleaned = " ".join(
+        cleaned.split()
+    )
+
+    # Remove a repeated PDF page header such as "MethodName 3"
+    # when it appears in the middle of an extracted sentence.
+    if term:
+        cleaned = re.sub(
+            rf"\b{re.escape(term)}\s+\d+\s+",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+
+    cleaned = re.sub(
+        r"\s+([,.;:!?])",
+        r"\1",
+        cleaned,
+    )
+
+    return cleaned.strip()
+
+
+def _extract_relevant_excerpt(
+    facet: str,
+    term: str,
+    chunk: RetrievedChunk,
+    max_sentences: int = 5,
+) -> str:
+    """
+    Select relevant source sentences for one question facet.
+
+    This is an extractive fallback: returned words come directly
+    from the retrieved chunk rather than from model knowledge.
+    """
+
+    text = _normalize_source_text(
+        chunk.text,
+        term=term,
+    )
+
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(
+            r"(?<=[.!?])\s+",
+            text,
+        )
+        if sentence.strip()
+    ]
+
+    if not sentences:
+        return ""
+
+    stop_words = {
+        "and", "are", "does", "for", "from", "how",
+        "into", "its", "the", "this", "used", "what",
+        "when", "where", "which", "with",
+    }
+    keywords = {
+        word
+        for word in re.findall(
+            r"[a-z][a-z0-9-]{2,}",
+            facet.casefold(),
+        )
+        if word not in stop_words
+    }
+
+    scored = []
+
+    for index, sentence in enumerate(sentences):
+        folded = sentence.casefold()
+        score = sum(
+            1
+            for keyword in keywords
+            if keyword in folded
+        )
+
+        if term and term.casefold() in folded:
+            score += 2
+
+        scored.append(
+            (score, index)
+        )
+
+    anchors = [
+        index
+        for score, index in sorted(
+            scored,
+            key=lambda item: (
+                item[0],
+                -item[1],
+            ),
+            reverse=True,
+        )[:2]
+        if score > 0
+    ]
+
+    if not anchors:
+        return ""
+
+    selected_indices = set()
+
+    for index in anchors:
+        selected_indices.update(
+            candidate
+            for candidate in (
+                index - 1,
+                index,
+                index + 1,
+            )
+            if 0 <= candidate < len(sentences)
+        )
+
+    ordered_indices = sorted(
+        selected_indices
+    )[:max_sentences]
+
+    return " ".join(
+        sentences[index]
+        for index in ordered_indices
+    )
+
+
+def _facet_chunk_score(
+    facet: str,
+    term: str,
+    chunk: RetrievedChunk,
+) -> int:
+    """Score how specifically a chunk addresses one facet."""
+
+    stop_words = {
+        "and", "are", "context", "does", "for", "from",
+        "how", "into", "its", "the", "this", "used",
+        "what", "when", "where", "which", "with",
+    }
+    words = [
+        word
+        for word in re.findall(
+            r"[a-z][a-z0-9-]{2,}",
+            facet.casefold(),
+        )
+        if word not in stop_words
+    ]
+    text = _normalize_source_text(
+        chunk.text,
+        term=term,
+    ).casefold()
+    text_words = set(
+        re.findall(
+            r"[a-z][a-z0-9-]{2,}",
+            text,
+        )
+    )
+
+    # Unique-word coverage prevents a chunk that repeats only
+    # the acronym from beating a chunk that discusses the
+    # distinctive subject of this facet.
+    score = 3 * len(
+        set(words).intersection(text_words)
+    )
+
+    # Reward consecutive two- and three-word phrases from the
+    # question, such as a distinctive multiword topic. This remains
+    # domain independent and is derived entirely from the input.
+    for size in (2, 3):
+        for index in range(
+            len(words) - size + 1
+        ):
+            phrase = " ".join(
+                words[index:index + size]
+            )
+
+            if phrase in text:
+                score += size * 2
+
+    if term and term.casefold() in text_words:
+        score += 1
+
+    return score
+
+
+def _build_extractive_term_answer(
+    question: str,
+    question_facets: List[str],
+    chunks: List[RetrievedChunk],
+    rag: TfidfRAG,
+    min_score: float,
+) -> Tuple[str, List[RetrievedChunk]]:
+    """
+    Answer a general ``What does X stand for?`` question.
+
+    The expansion must occur explicitly in the corpus as
+    ``Expanded Name (X)``. Additional question facets are
+    answered with relevant source excerpts, not stored facts.
+    """
+
+    term = _stand_for_term(
+        question
+    )
+
+    if not term:
+        return "", []
+
+    expansion = ""
+    expansion_chunk = None
+
+    for chunk in chunks:
+        candidate = _extract_term_expansion(
+            term,
+            chunk,
+        )
+
+        if candidate:
+            expansion = candidate
+            expansion_chunk = chunk
+            break
+
+    if not expansion or expansion_chunk is None:
+        return "", []
+
+    answer_parts = [
+        f"{term} stands for {expansion} "
+        f"({expansion_chunk.chunk_id})."
+    ]
+    evidence = [
+        expansion_chunk
+    ]
+
+    facets = (
+        question_facets[1:]
+        if len(question_facets) > 1
+        else []
+    )
+
+    for facet in facets:
+        if _stand_for_term(facet):
+            continue
+
+        results = rag.retrieve(
+            facet,
+            top_k=12,
+            min_score=min_score,
+        )
+
+        candidates = []
+        candidate_ids = set()
+
+        for chunk in results + chunks:
+            if chunk.chunk_id in candidate_ids:
+                continue
+
+            candidates.append(chunk)
+            candidate_ids.add(chunk.chunk_id)
+
+        candidates.sort(
+            key=lambda chunk: (
+                _facet_chunk_score(
+                    facet,
+                    term,
+                    chunk,
+                ),
+                chunk.score,
+            ),
+            reverse=True,
+        )
+
+        for chunk in candidates:
+            excerpt = _extract_relevant_excerpt(
+                facet,
+                term,
+                chunk,
+            )
+
+            if not excerpt:
+                continue
+
+            answer_parts.append(
+                "Relevant document evidence for the remaining "
+                f"question: \"{excerpt}\" "
+                f"({chunk.chunk_id})."
+            )
+
+            if all(
+                existing.chunk_id != chunk.chunk_id
+                for existing in evidence
+            ):
+                evidence.append(chunk)
+
+            break
+
+    return "\n\n".join(
+        answer_parts
+    ), evidence
 
 
 def _parse_model_output(
@@ -116,14 +557,12 @@ def _question_subject(
     Extract the subject from a direct definition question.
 
     Example:
-        "What is Primary Sclerosing Cholangitis?"
-        -> "primary sclerosing cholangitis"
+        "What is Example Process?"
+        -> "example process"
     """
 
     normalized = " ".join(
-        _expand_known_abbreviations(
-            question
-        ).casefold().split()
+        (question or "").casefold().split()
     ).strip()
 
     prefixes = (
@@ -204,10 +643,17 @@ def _order_context_chunks(
     return sorted(
         chunks,
         key=lambda chunk: (
-            not _is_direct_answer_chunk(
+            0
+            if _is_term_expansion_chunk(
                 question,
                 chunk,
-            ),
+            )
+            else 1
+            if _is_direct_answer_chunk(
+                question,
+                chunk,
+            )
+            else 2,
             _looks_like_references(
                 chunk
             ),
@@ -272,8 +718,8 @@ def _extract_direct_answer(
     # Prefer text immediately below a matching section
     # heading, for example:
     #
-    #   ## What is Primary Sclerosing Cholangitis?
-    #   Primary sclerosing cholangitis is ...
+        #   ## What is Example Process?
+        #   Example Process is ...
     for index, paragraph in enumerate(
         paragraphs
     ):
@@ -516,12 +962,28 @@ class EvidenceAgent:
                 note="The question was empty.",
             )
 
-        # Resolve known abbreviations deterministically before
-        # asking the LLM to plan retrieval. This prevents a
-        # small model from having to guess what PSC means.
+        # Normalize only harmless punctuation. Terminology is
+        # resolved from definitions discovered in the corpus,
+        # not from a hard-coded list of anticipated questions.
         retrieval_question = (
-            _expand_known_abbreviations(
+            _normalize_question_for_retrieval(
                 user_question
+            )
+        )
+
+        stand_for_term = _stand_for_term(
+            retrieval_question
+        )
+
+        # Direct "What is X?" matching benefits from replacing
+        # a corpus-defined alias with its full name.
+        # For "What does X stand for?", keep X unchanged so its
+        # explicit expansion heading can be recognized.
+        matching_question = (
+            retrieval_question
+            if stand_for_term
+            else self.rag.replace_query_aliases(
+                retrieval_question
             )
         )
 
@@ -574,9 +1036,26 @@ class EvidenceAgent:
         # completely replace what the user actually asked.
         # =====================================================
 
-        queries = [
+        question_facets = _question_facets(
             retrieval_question
-        ]
+        )
+
+        queries = list(
+            question_facets
+        )
+
+        # Add corpus-derived terminology to each facet. The
+        # original facet remains present, so this is query
+        # expansion rather than question-specific replacement.
+        for facet in question_facets:
+            expanded_facet = self.rag.expand_query(
+                facet
+            )
+
+            if expanded_facet not in queries:
+                queries.append(
+                    expanded_facet
+                )
 
         # Also keep the literal wording when it differs. The
         # expanded form is searched first because it carries
@@ -599,25 +1078,56 @@ class EvidenceAgent:
             if query not in queries:
                 queries.append(query)
 
-        # Use a maximum of 3 retrieval queries.
-        queries = queries[:3]
+        # Keep the retrieval work bounded while leaving room for
+        # the original question, its facets, corpus expansions,
+        # and useful LLM rewrites.
+        queries = queries[:8]
 
         # =====================================================
         # 2. RETRIEVE EVIDENCE
         # =====================================================
 
         retrieved_all = []
+        results_by_query = []
+
+        candidate_k = max(
+            self.top_k * 3,
+            12,
+        )
 
         for query in queries:
 
             results = self.rag.retrieve(
                 query,
-                top_k = self.top_k,
+                top_k=candidate_k,
                 min_score=self.min_score,
             )
 
             retrieved_all.extend(
                 results
+            )
+
+            results_by_query.append(
+                results
+            )
+
+        # A short name can appear throughout a paper, causing
+        # its explicit expansion heading to have a low TF-IDF
+        # score. Search exact definition patterns separately;
+        # this method returns only text actually present in the
+        # corpus and never guesses the expansion.
+        definition_results = []
+
+        if stand_for_term:
+            definition_results = (
+                self.rag.retrieve_term_definitions(
+                    stand_for_term,
+                    top_k=3,
+                )
+            )
+
+            retrieved_all.extend(
+                definition_results
             )
 
         # =====================================================
@@ -645,11 +1155,47 @@ class EvidenceAgent:
                     retrieved_chunk.chunk_id
                 ] = retrieved_chunk
 
-        retrieved = sorted(
-            best.values(),
-            key=lambda chunk: chunk.score,
-            reverse=True,
-        )[:self.top_k]
+        # Preserve evidence coverage across question facets.
+        # A single globally sorted list can otherwise devote all
+        # available slots to one half of a compound question.
+        selected = []
+        selected_ids = set()
+
+        def add_selected(
+            chunk: RetrievedChunk,
+        ) -> None:
+            if chunk.chunk_id in selected_ids:
+                return
+
+            selected.append(
+                best.get(
+                    chunk.chunk_id,
+                    chunk,
+                )
+            )
+            selected_ids.add(
+                chunk.chunk_id
+            )
+
+        for chunk in definition_results:
+            add_selected(chunk)
+
+        for results in results_by_query:
+            if results:
+                add_selected(
+                    results[0]
+                )
+
+        for chunk in _order_context_chunks(
+            matching_question,
+            list(best.values()),
+        ):
+            add_selected(chunk)
+
+        retrieved = _order_context_chunks(
+            matching_question,
+            selected[:self.top_k],
+        )
 
         # =====================================================
         # 4. VERY IMPORTANT:
@@ -674,7 +1220,7 @@ class EvidenceAgent:
         # =====================================================
 
         context_chunks = _order_context_chunks(
-            retrieval_question,
+            matching_question,
             retrieved,
         )
 
@@ -788,43 +1334,61 @@ class EvidenceAgent:
             chunk
             for chunk in context_chunks
             if _is_direct_answer_chunk(
-                retrieval_question,
+                matching_question,
                 chunk,
             )
         ]
 
-        extractive_answer = ""
-        extractive_chunk = None
-
-        for chunk in direct_chunks:
-            candidate = _extract_direct_answer(
-                retrieval_question,
-                chunk,
+        # Prefer a deterministic, evidence-only answer when a
+        # corpus heading explicitly expands the requested term.
+        # This also handles compound questions by quoting the
+        # best matching source passage for each remaining facet.
+        # It is generic: no acronym or scientific answer is
+        # stored in the code.
+        extractive_answer, extractive_chunks = (
+            _build_extractive_term_answer(
+                question=retrieval_question,
+                question_facets=question_facets,
+                chunks=context_chunks,
+                rag=self.rag,
+                min_score=self.min_score,
             )
+        )
 
-            if candidate:
-                extractive_answer = candidate
-                extractive_chunk = chunk
-                break
+        # Fall back to the existing direct-definition extractor
+        # for ordinary questions such as "What is X?".
+        if not extractive_answer:
+            for chunk in direct_chunks:
+                candidate = _extract_direct_answer(
+                    matching_question,
+                    chunk,
+                )
 
-        used_exact_extract = (
-            extractive_chunk is not None
+                if candidate:
+                    extractive_answer = candidate
+                    extractive_chunks = [chunk]
+                    break
+
+        used_exact_extract = bool(
+            extractive_answer
+            and extractive_chunks
         )
 
         if used_exact_extract:
-            # The answer consists only of text extracted from
-            # one retrieved chunk. Use its real citation and do
-            # not let a second LLM reinterpret or reject it.
+            # This is a general direct-definition path. The text
+            # is copied from one matching evidence chunk rather
+            # than generated from a stored answer.
             answer_text = extractive_answer
             context, citations = format_context(
-                [extractive_chunk],
-                max_chars=5000,
+                extractive_chunks,
+                max_chars=9000,
             )
 
         else:
             answer_prompt = prompt_answer_with_citations(
                 retrieval_question,
                 context,
+                question_facets=question_facets,
             )
 
             answer_text = self.llm.generate(
@@ -849,6 +1413,9 @@ class EvidenceAgent:
                     prompt_answer_with_citations(
                         retrieval_question,
                         focused_context,
+                        question_facets=(
+                            question_facets
+                        ),
                     )
                 )
 
@@ -878,9 +1445,13 @@ class EvidenceAgent:
                 "supported": True,
                 "unsupported_claims": [],
                 "notes": (
-                    "Answer extracted directly from "
-                    f"retrieved chunk "
-                    f"{extractive_chunk.chunk_id}."
+                    "Answer extracted directly from retrieved "
+                    "chunks: "
+                    + ", ".join(
+                        chunk.chunk_id
+                        for chunk in extractive_chunks
+                    )
+                    + "."
                 ),
             }
 
@@ -913,6 +1484,98 @@ class EvidenceAgent:
                 verify_text,
                 GroundingCheck,
             )
+
+        # =====================================================
+        # 9B. REPAIR A REJECTED DRAFT ONCE
+        #
+        # Small local models can produce an answer without the
+        # requested citations, or a verifier can identify one
+        # over-broad sentence. Give the model one evidence-only
+        # opportunity to repair the draft, then verify again.
+        # This is generic and does not contain stored answers.
+        # =====================================================
+
+        repair_text = ""
+
+        needs_repair = (
+            not used_exact_extract
+            and not _is_not_found_answer(
+                answer_text
+            )
+            and (
+                verify is None
+                or not verify.get(
+                    "supported",
+                    False,
+                )
+            )
+        )
+
+        if needs_repair:
+            unsupported_claims = (
+                verify.get(
+                    "unsupported_claims",
+                    [],
+                )
+                if verify is not None
+                else []
+            )
+
+            repair_prompt = (
+                prompt_repair_answer_with_citations(
+                    user_question=(
+                        retrieval_question
+                    ),
+                    answer=answer_text,
+                    context=context,
+                    unsupported_claims=(
+                        unsupported_claims
+                    ),
+                )
+            )
+
+            repair_text = self.llm.generate(
+                repair_prompt
+            ).strip()
+
+            if not _is_not_found_answer(
+                repair_text
+            ):
+                repaired_verify_prompt = (
+                    prompt_grounding_verify(
+                        repair_text,
+                        context,
+                    )
+                )
+
+                repaired_verify_text = (
+                    self.llm.generate(
+                        repaired_verify_prompt,
+                        json_schema=(
+                            GroundingCheck
+                            .model_json_schema()
+                        ),
+                    )
+                )
+
+                repaired_verify = (
+                    _parse_model_output(
+                        repaired_verify_text,
+                        GroundingCheck,
+                    )
+                )
+
+                if repaired_verify is not None:
+                    verify = repaired_verify
+                    verify_text = (
+                        repaired_verify_text
+                    )
+
+                    if repaired_verify.get(
+                        "supported",
+                        False,
+                    ):
+                        answer_text = repair_text
 
         # =====================================================
         # IMPORTANT SAFETY CHANGE
@@ -972,6 +1635,8 @@ class EvidenceAgent:
             "graph_facts_raw": facts_text,
 
             "answer_raw": generated_answer_text,
+
+            "answer_repair_raw": repair_text,
 
             "answer": answer_text,
 
