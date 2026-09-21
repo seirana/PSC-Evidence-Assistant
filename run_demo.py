@@ -97,7 +97,7 @@ def main():
     # ---------------------------------------------------------
 
     question = (
-        "What is Primary Sclerosing Cholangitis?"
+        "what does DEviRank? stand for and how is it used in the context of graph neural networks?"
     )
 
     print()
