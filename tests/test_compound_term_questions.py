@@ -195,7 +195,7 @@ class TestCompoundTermQuestions(unittest.TestCase):
             result["answer"],
         )
         self.assertIn(
-            "not used as a graph neural network",
+            "complementary strategy",
             result["answer"],
         )
         self.assertIn(
